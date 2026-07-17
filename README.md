@@ -8,42 +8,74 @@
 
 # Voicely Role
 
-Voicely Role watches selected Discord voice channels and pings a selected role when a configured number of counted, non-bot users is reached. Server managers can exclude specific users from all threshold counts.
+**Help your Discord server feel active.**
 
-Each notification/channel pair is independent. This allows several notifications on the same voice channel, such as:
+Voicely Role automatically pings a role whenever enough people have gathered in a voice channel, encouraging others to jump in and join the conversation. It's perfect for gaming communities, social servers, study groups, and any community that wants to turn "a few people are hanging out" into "everyone's joining."
 
-- 2 users: ping `@Casual Players`
-- 4 users: ping `@Gaming`
-- 8 users: ping `@Large Group`
+For example, when two people join your gaming voice channel, the bot can notify everyone with the **@Gaming** role that a group is forming.
 
-After a notification triggers for a voice channel, that notification will not trigger there again until the channel becomes completely empty.
+## Features
 
-## Commands
+- 🎙️ Watch one or many voice channels.
+- 🔔 Ping any role when a configurable number of people joins.
+- 📈 Encourage community activity by letting members know when conversations are already happening.
+- 🎯 Create multiple notifications for the same voice channel with different thresholds.
+- 💬 Customize the notification message with placeholders.
+- 🚫 Exclude bots, alt accounts, or specific users from counts.
+- 🔒 Delegate management to selected admin roles without giving full Administrator permissions.
 
-- `/voicely-role add` — Create a notification with dropdowns and a details modal.
-- `/voicely-role remove` — Select and remove a saved notification.
-- `/voicely-role list` — List saved notifications.
-- `/voicely-role edit-message` — Change a notification's custom message.
-- `/voicely-role exclude-user user:@User` — Exclude a mentioned user from all threshold counts.
-- `/voicely-role include-user user:@User` — Make an excluded user count again.
-- `/voicely-role excluded-users` — List the server's excluded users.
-- `/voicely-role admin-roles` — Select roles allowed to manage notifications. Requires Discord Administrator permission.
+Example notifications:
 
-Discord Administrators can always manage notifications. The configured Voicely Role admin roles can also add, remove, list, and edit notifications and manage excluded users.
+- 2 people → `@Casual Players`
+- 4 people → `@Gaming`
+- 8 people → `@Large Group`
 
-## Invite
+Each notification is tracked independently and won't trigger again until the voice channel becomes empty.
 
-Invite Voicely Role to your server using [this invite link](https://discord.com/oauth2/authorize?client_id=1527731147428073493)!
+---
 
-## Message placeholders
+# Getting Started
 
-Custom messages support:
+1. Invite Voicely Role to your server.
+2. Run `/voicely-role add`.
+3. Choose:
+    - The voice channel to watch.
+    - The role to ping.
+    - The text channel where notifications should be sent.
+    - The number of people required before sending the notification.
+    - (Optional) A custom notification message.
+4. That's it! The bot will automatically watch the voice channel and notify your community whenever enough people have gathered.
 
-- `{role}` — role mention
-- `{channel}` — voice channel mention
-- `{channel_name}` — voice channel name without a mention
-- `{count}` — current number of counted, non-bot users
-- `{threshold}` — configured threshold
+---
+
+# Commands
+
+| Command | Description |
+| --- | --- |
+| `/voicely-role add` | Create a new notification. |
+| `/voicely-role remove` | Remove a notification. |
+| `/voicely-role list` | View all configured notifications. |
+| `/voicely-role edit-message` | Change a notification's custom message. |
+| `/voicely-role exclude-user` | Exclude a user from all counts. |
+| `/voicely-role include-user` | Include an excluded user again. |
+| `/voicely-role excluded-users` | View all excluded users. |
+| `/voicely-role admin-roles` | Choose which roles can manage Voicely Role. |
+
+Discord Administrators always have access to these commands.
+
+---
+
+# Custom Messages
+
+You can personalize notification messages using placeholders.
+
+Available placeholders:
+
+- `{role}` — Mentioned role
+- `{channel}` — Voice channel mention
+- `{channel_name}` — Voice channel name
+- `{count}` — Current counted users
+- `{threshold}` — Configured threshold
 
 Default message:
 
@@ -51,18 +83,45 @@ Default message:
 🔊 {role} There are now **{count} people** in {channel}!
 ```
 
-## Excluded users
+Example custom message:
 
-Excluded users are ignored for every notification in the server. For example, if a voice channel contains two regular users and one excluded user, its count is `2`. This is useful if you have alt accounts that you use the join voice channels.
+```text
+🎮 {role} A game is starting in {channel}! Join now while everyone's gathering!
+```
 
-An excluded user also does not keep a notification armed. If all counted users leave and only excluded users remain, the effective count is zero and notifications for that channel re-arm. Use the slash command's `user` field to type or paste an `@mention`.
+---
 
-## Restart behavior
+# Excluded Users
 
-When the bot starts:
+Excluded users are ignored when counting people in voice channels.
 
-- Empty watched channels are re-armed.
-- Occupied channels below a notification's threshold remain armed and can trigger when the threshold is reached.
-- Occupied channels already at or above the threshold are marked as triggered without sending a startup ping.
+This is useful for:
 
-Settings are stored in `voicely-role.db`.
+- Alt accounts
+- Music bots
+- AFK accounts
+- Moderators who shouldn't affect thresholds
+
+If only excluded users remain in a voice channel, the notification automatically resets so it can trigger again when real users join.
+
+---
+
+# Restart Behavior
+
+If the bot restarts:
+
+- Empty watched channels are ready to trigger immediately.
+- Occupied channels below their threshold remain ready.
+- Channels already meeting or exceeding their threshold are remembered without sending duplicate notifications.
+
+Settings are automatically saved in `voicely-role.db`.
+
+---
+
+# Invite
+
+Ready to encourage more activity in your server?
+
+**Invite Voicely Role** using the invite link below:
+
+https://discord.com/oauth2/authorize?client_id=1527731147428073493
