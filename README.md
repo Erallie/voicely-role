@@ -17,7 +17,7 @@ For example, when two people join your gaming voice channel, the bot can notify 
 ## Features
 
 - 🎙️ Watch one or many voice channels.
-- 🔔 Ping any role when a configurable number of people joins.
+- 🔔 Ping any role when a configurable number of people join.
 - 📈 Encourage community activity by letting members know when conversations are already happening.
 - 🎯 Create multiple notifications for the same voice channel with different thresholds.
 - 💬 Customize the notification message with placeholders.
