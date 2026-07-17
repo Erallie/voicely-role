@@ -87,6 +87,12 @@ class Database:
                     PRIMARY KEY (guild_id, role_id)
                 );
 
+                CREATE TABLE IF NOT EXISTS excluded_users (
+                    guild_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    PRIMARY KEY (guild_id, user_id)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_notifications_guild
                     ON notifications(guild_id);
 
@@ -296,6 +302,43 @@ class Database:
             )
             self.connection.commit()
 
+    async def get_excluded_user_ids(self, guild_id: int) -> set[int]:
+        async with self.lock:
+            rows = self.connection.execute(
+                """
+                SELECT user_id
+                FROM excluded_users
+                WHERE guild_id = ?
+                ORDER BY user_id
+                """,
+                (guild_id,),
+            ).fetchall()
+        return {int(row["user_id"]) for row in rows}
+
+    async def add_excluded_user(self, guild_id: int, user_id: int) -> bool:
+        async with self.lock:
+            cursor = self.connection.execute(
+                """
+                INSERT OR IGNORE INTO excluded_users (guild_id, user_id)
+                VALUES (?, ?)
+                """,
+                (guild_id, user_id),
+            )
+            self.connection.commit()
+            return cursor.rowcount > 0
+
+    async def remove_excluded_user(self, guild_id: int, user_id: int) -> bool:
+        async with self.lock:
+            cursor = self.connection.execute(
+                """
+                DELETE FROM excluded_users
+                WHERE guild_id = ? AND user_id = ?
+                """,
+                (guild_id, user_id),
+            )
+            self.connection.commit()
+            return cursor.rowcount > 0
+
     async def remove_guild(self, guild_id: int) -> None:
         async with self.lock:
             self.connection.execute(
@@ -304,6 +347,10 @@ class Database:
             )
             self.connection.execute(
                 "DELETE FROM admin_roles WHERE guild_id = ?",
+                (guild_id,),
+            )
+            self.connection.execute(
+                "DELETE FROM excluded_users WHERE guild_id = ?",
                 (guild_id,),
             )
             self.connection.commit()
@@ -668,11 +715,12 @@ class AddNotificationView(RestrictedView):
             voice_channel_ids=self.voice_channel_ids,
         )
 
+        excluded_user_ids = await self.database.get_excluded_user_ids(self.guild.id)
         for voice_channel_id in self.voice_channel_ids:
             voice_channel = self.guild.get_channel(voice_channel_id)
             if not isinstance(voice_channel, discord.VoiceChannel):
                 continue
-            count = human_count(voice_channel)
+            count = human_count(voice_channel, excluded_user_ids)
             if count >= self.threshold_value:
                 await self.database.set_triggered(
                     notification_id,
@@ -1032,22 +1080,27 @@ class VoicelyRoleBot(commands.Bot):
 
     async def reconcile_all_trigger_states(self) -> None:
         for guild in self.guilds:
-            notifications = await self.database.get_notifications(guild.id)
-            for notification in notifications:
-                channel_ids = await self.database.get_voice_channel_ids(notification.id)
-                for channel_id in channel_ids:
-                    channel = guild.get_channel(channel_id)
-                    if not isinstance(channel, discord.VoiceChannel):
-                        continue
-                    count = human_count(channel)
-                    await self.database.set_triggered(
-                        notification.id,
-                        channel.id,
-                        count >= notification.threshold,
-                    )
+            await self.reconcile_guild_trigger_states(guild)
+
+    async def reconcile_guild_trigger_states(self, guild: discord.Guild) -> None:
+        excluded_user_ids = await self.database.get_excluded_user_ids(guild.id)
+        notifications = await self.database.get_notifications(guild.id)
+        for notification in notifications:
+            channel_ids = await self.database.get_voice_channel_ids(notification.id)
+            for channel_id in channel_ids:
+                channel = guild.get_channel(channel_id)
+                if not isinstance(channel, discord.VoiceChannel):
+                    continue
+                count = human_count(channel, excluded_user_ids)
+                await self.database.set_triggered(
+                    notification.id,
+                    channel.id,
+                    count >= notification.threshold,
+                )
 
     async def evaluate_voice_channel(self, channel: discord.VoiceChannel) -> None:
-        count = human_count(channel)
+        excluded_user_ids = await self.database.get_excluded_user_ids(channel.guild.id)
+        count = human_count(channel, excluded_user_ids)
         watched = await self.database.get_notifications_for_voice_channel(
             channel.guild.id,
             channel.id,
@@ -1294,6 +1347,84 @@ class VoicelyRoleCommands(commands.Cog):
         )
 
     @group.command(
+        name="exclude-user",
+        description="Exclude a user from voice-channel threshold counts.",
+    )
+    @app_commands.describe(user="Mention the user who should not be counted")
+    async def exclude_user(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member,
+    ) -> None:
+        if not await self.require_manager(interaction):
+            return
+        assert interaction.guild is not None
+
+        added = await self.database.add_excluded_user(interaction.guild.id, user.id)
+        await self.bot.reconcile_guild_trigger_states(interaction.guild)
+        message = (
+            f"✅ {user.mention} will no longer count toward voice-channel thresholds."
+            if added
+            else f"{user.mention} is already excluded from threshold counts."
+        )
+        await interaction.response.send_message(
+            message,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @group.command(
+        name="include-user",
+        description="Allow an excluded user to count toward thresholds again.",
+    )
+    @app_commands.describe(user="Mention the user who should be counted again")
+    async def include_user(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member,
+    ) -> None:
+        if not await self.require_manager(interaction):
+            return
+        assert interaction.guild is not None
+
+        removed = await self.database.remove_excluded_user(interaction.guild.id, user.id)
+        await self.bot.reconcile_guild_trigger_states(interaction.guild)
+        message = (
+            f"✅ {user.mention} will count toward voice-channel thresholds again."
+            if removed
+            else f"{user.mention} was not excluded from threshold counts."
+        )
+        await interaction.response.send_message(
+            message,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @group.command(
+        name="excluded-users",
+        description="List users excluded from voice-channel threshold counts.",
+    )
+    async def excluded_users(self, interaction: discord.Interaction) -> None:
+        if not await self.require_manager(interaction):
+            return
+        assert interaction.guild is not None
+
+        user_ids = await self.database.get_excluded_user_ids(interaction.guild.id)
+        if not user_ids:
+            await interaction.response.send_message(
+                "No users are currently excluded from threshold counts.",
+                ephemeral=True,
+            )
+            return
+
+        mentions = ", ".join(f"<@{user_id}>" for user_id in sorted(user_ids))
+        await interaction.response.send_message(
+            f"**Users excluded from threshold counts:**\n{mentions}",
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @group.command(
         name="admin-roles",
         description="Choose roles allowed to manage Voicely Role.",
     )
@@ -1351,8 +1482,16 @@ def find_unknown_placeholders(template: str) -> set[str]:
     return unknown
 
 
-def human_count(channel: discord.VoiceChannel) -> int:
-    return sum(1 for member in channel.members if not member.bot)
+def human_count(
+    channel: discord.VoiceChannel,
+    excluded_user_ids: set[int] | None = None,
+) -> int:
+    excluded = excluded_user_ids or set()
+    return sum(
+        1
+        for member in channel.members
+        if not member.bot and member.id not in excluded
+    )
 
 
 def read_optional_int(value: str | None) -> int | None:
