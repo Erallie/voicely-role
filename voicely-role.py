@@ -1197,11 +1197,17 @@ class VoicelyRoleBot(commands.Bot):
                     if not isinstance(channel, discord.VoiceChannel):
                         continue
                     count = await counted_human_count(channel, self.database)
-                    await self.database.set_triggered(
-                        notification.id,
-                        channel.id,
-                        count >= notification.threshold,
-                    )
+                    if count == 0:
+                        await self.database.clear_trigger_state(
+                            notification.id,
+                            channel.id,
+                        )
+                    else:
+                        await self.database.set_triggered(
+                            notification.id,
+                            channel.id,
+                            count >= notification.threshold,
+                        )
 
     async def evaluate_voice_channel(self, channel: discord.VoiceChannel) -> None:
         count = await counted_human_count(channel, self.database)
