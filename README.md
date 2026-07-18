@@ -41,7 +41,7 @@ Each notification is tracked independently and won't trigger again until the cou
 # Getting Started
 
 1. Invite Voicely Role to your server.
-2. Run `/voicely-role add`.
+2. Run `/add`.
 3. Choose:
     - The voice channel(s) to watch.
     - The role to ping.
@@ -57,14 +57,14 @@ Each notification is tracked independently and won't trigger again until the cou
 
 | Command | Description |
 | --- | --- |
-| `/voicely-role add` | Create a new notification. |
-| `/voicely-role remove` | Remove a notification. |
-| `/voicely-role list` | View all configured notifications. |
-| `/voicely-role edit-message` | Change a notification's messages. |
-| `/voicely-role exclude-user` | Exclude a user from all counts. |
-| `/voicely-role include-user` | Include an excluded user again. |
-| `/voicely-role excluded-users` | View all excluded users. |
-| `/voicely-role admin-roles` | Choose which roles can manage Voicely Role. |
+| `/add` | Create a new notification. |
+| `/remove` | Remove a notification. |
+| `/list` | View all configured notifications. |
+| `/edit-message` | Change a notification's messages. |
+| `/exclude-user` | Exclude a user from all counts. |
+| `/include-user` | Include an excluded user again. |
+| `/excluded-users` | View all excluded users. |
+| `/admin-roles` | Choose which roles can manage Voicely Role. |
 
 Discord Administrators always have access to these commands.
 

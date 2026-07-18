@@ -1393,11 +1393,6 @@ class VoicelyRoleBot(commands.Bot):
 
 
 class VoicelyRoleCommands(commands.Cog):
-    group = app_commands.Group(
-        name="voicely-role",
-        description="Configure voice-channel role notifications.",
-        guild_only=True,
-    )
 
     def __init__(self, bot: VoicelyRoleBot, database: Database) -> None:
         self.bot = bot
@@ -1436,7 +1431,7 @@ class VoicelyRoleCommands(commands.Cog):
         )
         return False
 
-    @group.command(name="add", description="Create a voice-channel role notification.")
+    @app_commands.command(name="add", description="Create a voice-channel role notification.")
     async def add(self, interaction: discord.Interaction) -> None:
         if not await self.require_manager(interaction):
             return
@@ -1452,7 +1447,7 @@ class VoicelyRoleCommands(commands.Cog):
             ephemeral=True,
         )
 
-    @group.command(name="remove", description="Remove a saved notification.")
+    @app_commands.command(name="remove", description="Remove a saved notification.")
     async def remove(self, interaction: discord.Interaction) -> None:
         if not await self.require_manager(interaction):
             return
@@ -1477,7 +1472,7 @@ class VoicelyRoleCommands(commands.Cog):
             ephemeral=True,
         )
 
-    @group.command(name="list", description="List this server's notifications.")
+    @app_commands.command(name="list", description="List this server's notifications.")
     async def list_notifications(self, interaction: discord.Interaction) -> None:
         if not await self.require_manager(interaction):
             return
@@ -1522,7 +1517,7 @@ class VoicelyRoleCommands(commands.Cog):
         embeds.append(current)
         await interaction.response.send_message(embeds=embeds[:10], ephemeral=True)
 
-    @group.command(
+    @app_commands.command(
         name="edit-message",
         description="Change a saved notification's active and everyone-left messages.",
     )
@@ -1550,7 +1545,7 @@ class VoicelyRoleCommands(commands.Cog):
             ephemeral=True,
         )
 
-    @group.command(
+    @app_commands.command(
         name="exclude-user",
         description="Exclude a user from all voice-channel counts.",
     )
@@ -1581,7 +1576,7 @@ class VoicelyRoleCommands(commands.Cog):
         ):
             await self.bot.evaluate_voice_channel(user.voice.channel)
 
-    @group.command(
+    @app_commands.command(
         name="include-user",
         description="Include a previously excluded user in counts again.",
     )
@@ -1612,7 +1607,7 @@ class VoicelyRoleCommands(commands.Cog):
         ):
             await self.bot.evaluate_voice_channel(user.voice.channel)
 
-    @group.command(
+    @app_commands.command(
         name="excluded-users",
         description="List users excluded from voice-channel counts.",
     )
@@ -1636,7 +1631,7 @@ class VoicelyRoleCommands(commands.Cog):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @group.command(
+    @app_commands.command(
         name="admin-roles",
         description="Choose roles allowed to manage Voicely Role.",
     )
@@ -1670,6 +1665,10 @@ class VoicelyRoleCommands(commands.Cog):
             )
             return
         raise error
+    
+    async def cog_load(self) -> None:
+        for command in self.walk_app_commands():
+            self.bot.tree.add_command(command)
 
 
 ALLOWED_PLACEHOLDERS = {
