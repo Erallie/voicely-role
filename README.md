@@ -36,6 +36,8 @@ Example notifications:
 
 Each notification is tracked independently and won't trigger again until the counted users have completely left the voice channel.
 
+If you want something similar but that pings in private dm's, try [Voicely Ping](https://discord.com/oauth2/authorize?client_id=1290742648377966735) instead.
+
 # Getting Started
 
 1. Invite Voicely Role to your server.
