@@ -1151,20 +1151,14 @@ class VoicelyRoleBot(commands.Bot):
         await self.database.initialize()
         await self.add_cog(VoicelyRoleCommands(self, self.database))
 
-        dev_guild = discord.Object(id=1102582171207741480)
-
-        # Remove the old development-server copies.
-        self.tree.clear_commands(guild=dev_guild)
-        removed = await self.tree.sync(guild=dev_guild)
-
-        logger.info(
-            "Cleared development commands. %s guild command(s) remain.",
-            len(removed),
-        )
-
-        # Keep/update the global commands.
-        synced = await self.tree.sync()
-        logger.info("Synced %s global command(s).", len(synced))
+        if self.dev_guild_id is not None:
+            guild_object = discord.Object(id=self.dev_guild_id)
+            self.tree.copy_global_to(guild=guild_object)
+            synced = await self.tree.sync(guild=guild_object)
+            logger.info("Synced %s development command(s).", len(synced))
+        else:
+            synced = await self.tree.sync()
+            logger.info("Synced %s global command(s).", len(synced))
 
     async def on_ready(self) -> None:
         logger.info("Logged in as %s (%s)", self.user, self.user.id if self.user else "unknown")
