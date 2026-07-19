@@ -22,6 +22,8 @@ You could prompt people to select the role in onboarding or your server roles ch
 
 - 🎙️ Watch one or many voice channels.
 - 🔔 Ping any role when a configurable number of people join.
+- 🌎 Optionally notify **@everyone** instead of a role.
+- 💭 Optionally send the notification in the voice channel's side chat instead of a text channel.
 - ✏️ Automatically update the notification with the current number of people as they join and leave.
 - 💤 Automatically edit the notification again once everyone has left the voice channel.
 - 📈 Encourage community activity by letting members know when conversations are already happening.
@@ -77,7 +79,7 @@ Each notification has two customizable messages:
 
 Available placeholders:
 
-- `{role}` — Mentioned role
+- `{role}` — Mentioned role or **@everyone**
 - `{channel}` — Voice channel mention
 - `{channel_name}` — Voice channel name
 - `{count}` — Current counted users
