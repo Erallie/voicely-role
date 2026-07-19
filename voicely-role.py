@@ -688,7 +688,7 @@ class AddNotificationView(RestrictedView):
         self.add_item(everyone_button)
 
         sidechat_button = discord.ui.Button(
-            label="Send in Sidechat",
+            label="Send in sidechat",
             emoji="💬",
             style=(
                 discord.ButtonStyle.success
@@ -837,7 +837,7 @@ class AddNotificationView(RestrictedView):
         if not self.send_in_sidechat and self.destination_channel_id is None:
             await interaction.response.send_message(
                 "Select the text channel where the ping should be sent, "
-                "or enable **Send in Sidechat**.",
+                "or enable **Send in sidechat**.",
                 ephemeral=True,
             )
             return
