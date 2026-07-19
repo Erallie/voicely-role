@@ -1247,12 +1247,17 @@ class VoicelyRoleBot(commands.Bot):
         self.initialized_states = False
 
     async def setup_hook(self) -> None:
-        guild = discord.Object(id=1102582171207741480)
+        await self.database.initialize()
+        await self.add_cog(VoicelyRoleCommands(self, self.database))
 
-        self.tree.clear_commands(guild=guild)
-        await self.tree.sync(guild=guild)
-
-        print("Cleared guild commands.")
+        if self.dev_guild_id is not None:
+            guild_object = discord.Object(id=self.dev_guild_id)
+            self.tree.copy_global_to(guild=guild_object)
+            synced = await self.tree.sync(guild=guild_object)
+            logger.info("Synced %s development command(s).", len(synced))
+        else:
+            synced = await self.tree.sync()
+            logger.info("Synced %s global command(s).", len(synced))
 
     async def on_ready(self) -> None:
         logger.info("Logged in as %s (%s)", self.user, self.user.id if self.user else "unknown")
