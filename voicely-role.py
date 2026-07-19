@@ -563,7 +563,7 @@ class VoiceChannelPicker(discord.ui.ChannelSelect):
 class RolePicker(discord.ui.RoleSelect):
     def __init__(self, setup_view: AddNotificationView) -> None:
         super().__init__(
-            placeholder="Select a role or @everyone to ping",
+            placeholder="Select a role to ping",
             min_values=1,
             max_values=1,
             row=1,
@@ -573,6 +573,7 @@ class RolePicker(discord.ui.RoleSelect):
     async def callback(self, interaction: discord.Interaction) -> None:
         role = self.values[0]
         self.setup_view.role_id = role.id
+        self.setup_view.rebuild_items()
         await interaction.response.edit_message(
             content=self.setup_view.summary(),
             view=self.setup_view,
@@ -655,6 +656,19 @@ class AddNotificationView(RestrictedView):
         if self.accessible_text_channels:
             self.add_item(DestinationChannelPicker(self))
 
+        everyone_button = discord.ui.Button(
+            label="Ping @everyone",
+            emoji="📢",
+            style=(
+                discord.ButtonStyle.success
+                if self.role_id == self.guild.default_role.id
+                else discord.ButtonStyle.secondary
+            ),
+            row=3,
+        )
+        everyone_button.callback = self.select_everyone
+        self.add_item(everyone_button)
+
         if self.destination_page_count > 1:
             previous = discord.ui.Button(
                 label="Previous text channels",
@@ -698,6 +712,11 @@ class AddNotificationView(RestrictedView):
         cancel.callback = self.cancel_setup
         self.add_item(cancel)
 
+    async def select_everyone(self, interaction: discord.Interaction) -> None:
+        self.role_id = self.guild.default_role.id
+        self.rebuild_items()
+        await interaction.response.edit_message(content=self.summary(), view=self)
+
     async def previous_destination_page(self, interaction: discord.Interaction) -> None:
         self.destination_page -= 1
         self.rebuild_items()
@@ -714,7 +733,12 @@ class AddNotificationView(RestrictedView):
             if self.voice_channel_ids
             else "*Not selected*"
         )
-        role = f"<@&{self.role_id}>" if self.role_id else "*Not selected*"
+        if self.role_id == self.guild.default_role.id:
+            role = "@everyone"
+        elif self.role_id is not None:
+            role = f"<@&{self.role_id}>"
+        else:
+            role = "*Not selected*"
         destination = (
             f"<#{self.destination_channel_id}>"
             if self.destination_channel_id
@@ -732,7 +756,7 @@ class AddNotificationView(RestrictedView):
             f"**Role:** {role}\n"
             f"**Ping channel:** {destination}\n"
             f"**Details:** {details}\n\n"
-            "Use the dropdowns, enter the details, and then save."
+            "Use the dropdowns to select a role (or press **📢 Ping @everyone** instead), enter the details, and then save."
             + (
                 "\n\n⚠️ I cannot currently send messages in any server text channel."
                 if not self.accessible_text_channels
