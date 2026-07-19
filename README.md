@@ -16,6 +16,8 @@ Voicely Role automatically pings a role whenever enough people have gathered in 
 
 For example, when two people join your gaming voice channel, the bot can notify everyone with the **@Gaming** role that a group is forming.
 
+You could prompt people to select the role in onboarding or your server roles channel for the best visibility.
+
 ## Features
 
 - 🎙️ Watch one or many voice channels.
