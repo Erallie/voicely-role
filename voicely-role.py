@@ -667,7 +667,10 @@ class AddNotificationView(RestrictedView):
     def rebuild_items(self) -> None:
         self.clear_items()
         self.add_item(VoiceChannelPicker(self))
-        self.add_item(RolePicker(self))
+
+        if self.role_id != self.guild.default_role.id:
+            self.add_item(RolePicker(self))
+
         if self.accessible_text_channels and not self.send_in_sidechat:
             self.add_item(DestinationChannelPicker(self))
 
