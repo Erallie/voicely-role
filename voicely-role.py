@@ -16,8 +16,8 @@ from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent
 DATABASE_PATH = BASE_DIR / "voicely-role.db"
-DEFAULT_MESSAGE = "🔊 {role} There are now **{count} people** in {channel}!"
-DEFAULT_ENDED_MESSAGE = "🔇 Everyone has left {channel}."
+DEFAULT_MESSAGE = "{role} There are now **{count} people** in {channel}!"
+DEFAULT_ENDED_MESSAGE = "Everyone has left {channel}."
 MAX_CUSTOM_MESSAGE_LENGTH = 1500
 
 logging.basicConfig(
