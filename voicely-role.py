@@ -809,7 +809,7 @@ class AddNotificationView(RestrictedView):
             f"**Ping channel:** {destination}\n"
             f"**Details:** {details}\n\n"
             "Select a role from the dropdown or press **📢 Ping @everyone**. "
-            "Choose a text channel or press **💬 Send in Sidechat**, "
+            "Choose a text channel or press **💬 Send in sidechat**, "
             "enter the details, and then save."
             + (
                 "\n\n⚠️ I cannot currently send messages in any server text channel."
