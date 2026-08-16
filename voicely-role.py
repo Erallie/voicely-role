@@ -1479,6 +1479,17 @@ class VoicelyRoleBot(commands.Bot):
         if not isinstance(destination, (discord.TextChannel, discord.VoiceChannel)):
             return
 
+        role = voice_channel.guild.get_role(notification.role_id)
+        is_everyone = notification.role_id == voice_channel.guild.id
+
+        if role is None:
+            logger.warning(
+                "Notification %s could not retain mention for deleted role %s.",
+                notification.id,
+                notification.role_id,
+            )
+            return
+
         try:
             message = await destination.fetch_message(message_id)
             await message.edit(
@@ -1488,7 +1499,12 @@ class VoicelyRoleBot(commands.Bot):
                     count,
                     ended=ended,
                 ),
-                allowed_mentions=discord.AllowedMentions.none(),
+                allowed_mentions=discord.AllowedMentions(
+                    everyone=is_everyone,
+                    users=False,
+                    roles=[] if is_everyone else [role],
+                    replied_user=False,
+                ),
             )
         except discord.NotFound:
             logger.warning(
