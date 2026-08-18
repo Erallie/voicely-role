@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import sqlite3
+import string
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import AsyncIterator, Iterable
 
+import aiosqlite
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -42,15 +44,37 @@ class Notification:
 
 class Database:
     def __init__(self, path: Path) -> None:
-        self.connection = sqlite3.connect(path)
-        self.connection.row_factory = sqlite3.Row
-        self.connection.execute("PRAGMA foreign_keys = ON")
-        self.connection.execute("PRAGMA journal_mode = WAL")
+        self.path = path
+        self.connection: aiosqlite.Connection | None = None
         self.lock = asyncio.Lock()
+        self.excluded_user_cache: dict[int, frozenset[int]] = {}
+
+    def _connection(self) -> aiosqlite.Connection:
+        if self.connection is None:
+            raise RuntimeError("Database has not been initialized.")
+        return self.connection
+
+    @asynccontextmanager
+    async def transaction(self) -> AsyncIterator[aiosqlite.Connection]:
+        connection = self._connection()
+        await connection.execute("BEGIN IMMEDIATE")
+        try:
+            yield connection
+        except BaseException:
+            await connection.rollback()
+            raise
+        else:
+            await connection.commit()
 
     async def initialize(self) -> None:
         async with self.lock:
-            self.connection.executescript(
+            self.connection = await aiosqlite.connect(self.path)
+            self.connection.row_factory = aiosqlite.Row
+            await self.connection.execute("PRAGMA foreign_keys = ON")
+            await self.connection.execute("PRAGMA journal_mode = WAL")
+            await self.connection.execute("PRAGMA synchronous = NORMAL")
+            await self.connection.execute("PRAGMA busy_timeout = 5000")
+            await self.connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS notifications (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,18 +133,18 @@ class Database:
 
             notification_columns = {
                 str(row["name"])
-                for row in self.connection.execute(
-                    "PRAGMA table_info(notifications)"
+                for row in await (
+                    await self.connection.execute("PRAGMA table_info(notifications)")
                 ).fetchall()
             }
             if "send_in_sidechat" not in notification_columns:
-                self.connection.execute(
+                await self.connection.execute(
                     "ALTER TABLE notifications "
                     "ADD COLUMN send_in_sidechat INTEGER NOT NULL DEFAULT 0"
                 )
 
             if "ended_message_template" not in notification_columns:
-                self.connection.execute(
+                await self.connection.execute(
                     """
                     ALTER TABLE notifications
                     ADD COLUMN ended_message_template TEXT NOT NULL
@@ -130,16 +154,22 @@ class Database:
 
             trigger_state_columns = {
                 str(row["name"])
-                for row in self.connection.execute(
-                    "PRAGMA table_info(trigger_states)"
+                for row in await (
+                    await self.connection.execute("PRAGMA table_info(trigger_states)")
                 ).fetchall()
             }
             if "message_id" not in trigger_state_columns:
-                self.connection.execute(
+                await self.connection.execute(
                     "ALTER TABLE trigger_states ADD COLUMN message_id INTEGER"
                 )
 
-            self.connection.commit()
+            await self.connection.commit()
+
+    async def close(self) -> None:
+        async with self.lock:
+            if self.connection is not None:
+                await self.connection.close()
+                self.connection = None
 
     async def create_notification(
         self,
@@ -154,8 +184,8 @@ class Database:
         voice_channel_ids: Iterable[int],
     ) -> int:
         channel_ids = list(dict.fromkeys(voice_channel_ids))
-        async with self.lock:
-            cursor = self.connection.execute(
+        async with self.lock, self.transaction():
+            cursor = await self.connection.execute(
                 """
                 INSERT INTO notifications (
                     guild_id,
@@ -181,7 +211,7 @@ class Database:
             )
             notification_id = int(cursor.lastrowid)
 
-            self.connection.executemany(
+            await self.connection.executemany(
                 """
                 INSERT INTO notification_voice_channels (
                     notification_id,
@@ -190,7 +220,7 @@ class Database:
                 """,
                 [(notification_id, channel_id) for channel_id in channel_ids],
             )
-            self.connection.executemany(
+            await self.connection.executemany(
                 """
                 INSERT INTO trigger_states (
                     notification_id,
@@ -200,12 +230,11 @@ class Database:
                 """,
                 [(notification_id, channel_id) for channel_id in channel_ids],
             )
-            self.connection.commit()
             return notification_id
 
     async def get_notifications(self, guild_id: int) -> list[Notification]:
         async with self.lock:
-            rows = self.connection.execute(
+            rows = await self.connection.execute_fetchall(
                 """
                 SELECT *
                 FROM notifications
@@ -213,7 +242,7 @@ class Database:
                 ORDER BY id
                 """,
                 (guild_id,),
-            ).fetchall()
+            )
         return [self._notification_from_row(row) for row in rows]
 
     async def get_notification(
@@ -222,19 +251,20 @@ class Database:
         notification_id: int,
     ) -> Notification | None:
         async with self.lock:
-            row = self.connection.execute(
+            cursor = await self.connection.execute(
                 """
                 SELECT *
                 FROM notifications
                 WHERE guild_id = ? AND id = ?
                 """,
                 (guild_id, notification_id),
-            ).fetchone()
+            )
+            row = await cursor.fetchone()
         return self._notification_from_row(row) if row else None
 
     async def get_voice_channel_ids(self, notification_id: int) -> list[int]:
         async with self.lock:
-            rows = self.connection.execute(
+            rows = await self.connection.execute_fetchall(
                 """
                 SELECT voice_channel_id
                 FROM notification_voice_channels
@@ -242,8 +272,33 @@ class Database:
                 ORDER BY voice_channel_id
                 """,
                 (notification_id,),
-            ).fetchall()
+            )
         return [int(row["voice_channel_id"]) for row in rows]
+
+    async def get_notifications_with_voice_channels(
+        self,
+        guild_id: int,
+    ) -> list[tuple[Notification, list[int]]]:
+        async with self.lock:
+            rows = await self._connection().execute_fetchall(
+                """
+                SELECT n.*, c.voice_channel_id
+                FROM notifications AS n
+                JOIN notification_voice_channels AS c
+                    ON c.notification_id = n.id
+                WHERE n.guild_id = ?
+                ORDER BY n.id, c.voice_channel_id
+                """,
+                (guild_id,),
+            )
+
+        grouped: list[tuple[Notification, list[int]]] = []
+        for row in rows:
+            notification_id = int(row["id"])
+            if not grouped or grouped[-1][0].id != notification_id:
+                grouped.append((self._notification_from_row(row), []))
+            grouped[-1][1].append(int(row["voice_channel_id"]))
+        return grouped
 
     async def get_notifications_for_voice_channel(
         self,
@@ -251,7 +306,7 @@ class Database:
         voice_channel_id: int,
     ) -> list[tuple[Notification, bool, int | None]]:
         async with self.lock:
-            rows = self.connection.execute(
+            rows = await self.connection.execute_fetchall(
                 """
                 SELECT n.*, s.triggered, s.message_id
                 FROM notifications AS n
@@ -265,7 +320,7 @@ class Database:
                 ORDER BY n.id
                 """,
                 (guild_id, voice_channel_id),
-            ).fetchall()
+            )
 
         return [
             (
@@ -283,7 +338,7 @@ class Database:
         triggered: bool,
     ) -> None:
         async with self.lock:
-            self.connection.execute(
+            await self.connection.execute(
                 """
                 UPDATE trigger_states
                 SET triggered = ?
@@ -291,7 +346,7 @@ class Database:
                 """,
                 (int(triggered), notification_id, voice_channel_id),
             )
-            self.connection.commit()
+            await self.connection.commit()
 
     async def set_message_id(
         self,
@@ -300,7 +355,7 @@ class Database:
         message_id: int | None,
     ) -> None:
         async with self.lock:
-            self.connection.execute(
+            await self.connection.execute(
                 """
                 UPDATE trigger_states
                 SET message_id = ?
@@ -308,7 +363,7 @@ class Database:
                 """,
                 (message_id, notification_id, voice_channel_id),
             )
-            self.connection.commit()
+            await self.connection.commit()
 
     async def clear_trigger_state(
         self,
@@ -316,7 +371,7 @@ class Database:
         voice_channel_id: int,
     ) -> None:
         async with self.lock:
-            self.connection.execute(
+            await self.connection.execute(
                 """
                 UPDATE trigger_states
                 SET triggered = 0, message_id = NULL
@@ -324,18 +379,42 @@ class Database:
                 """,
                 (notification_id, voice_channel_id),
             )
-            self.connection.commit()
+            await self.connection.commit()
+
+    async def set_trigger_state(
+        self,
+        notification_id: int,
+        voice_channel_id: int,
+        *,
+        triggered: bool,
+        message_id: int | None,
+    ) -> None:
+        async with self.lock:
+            await self._connection().execute(
+                """
+                UPDATE trigger_states
+                SET triggered = ?, message_id = ?
+                WHERE notification_id = ? AND voice_channel_id = ?
+                """,
+                (
+                    int(triggered),
+                    message_id,
+                    notification_id,
+                    voice_channel_id,
+                ),
+            )
+            await self._connection().commit()
 
     async def delete_notification(self, guild_id: int, notification_id: int) -> bool:
         async with self.lock:
-            cursor = self.connection.execute(
+            cursor = await self.connection.execute(
                 """
                 DELETE FROM notifications
                 WHERE guild_id = ? AND id = ?
                 """,
                 (guild_id, notification_id),
             )
-            self.connection.commit()
+            await self.connection.commit()
             return cursor.rowcount > 0
 
     async def update_messages(
@@ -346,7 +425,7 @@ class Database:
         ended_message_template: str,
     ) -> bool:
         async with self.lock:
-            cursor = self.connection.execute(
+            cursor = await self.connection.execute(
                 """
                 UPDATE notifications
                 SET message_template = ?, ended_message_template = ?
@@ -359,91 +438,99 @@ class Database:
                     notification_id,
                 ),
             )
-            self.connection.commit()
+            await self.connection.commit()
             return cursor.rowcount > 0
 
-    async def get_excluded_user_ids(self, guild_id: int) -> set[int]:
+    async def get_excluded_user_ids(self, guild_id: int) -> frozenset[int]:
+        cached = self.excluded_user_cache.get(guild_id)
+        if cached is not None:
+            return cached
         async with self.lock:
-            rows = self.connection.execute(
+            rows = await self._connection().execute_fetchall(
                 """
                 SELECT user_id
                 FROM excluded_users
                 WHERE guild_id = ?
                 """,
                 (guild_id,),
-            ).fetchall()
-        return {int(row["user_id"]) for row in rows}
+            )
+            user_ids = frozenset(int(row["user_id"]) for row in rows)
+            self.excluded_user_cache[guild_id] = user_ids
+        return user_ids
 
     async def exclude_user(self, guild_id: int, user_id: int) -> bool:
         async with self.lock:
-            cursor = self.connection.execute(
+            cursor = await self.connection.execute(
                 """
                 INSERT OR IGNORE INTO excluded_users (guild_id, user_id)
                 VALUES (?, ?)
                 """,
                 (guild_id, user_id),
             )
-            self.connection.commit()
+            await self.connection.commit()
+            if cursor.rowcount > 0:
+                self.excluded_user_cache.pop(guild_id, None)
             return cursor.rowcount > 0
 
     async def include_user(self, guild_id: int, user_id: int) -> bool:
         async with self.lock:
-            cursor = self.connection.execute(
+            cursor = await self.connection.execute(
                 """
                 DELETE FROM excluded_users
                 WHERE guild_id = ? AND user_id = ?
                 """,
                 (guild_id, user_id),
             )
-            self.connection.commit()
+            await self.connection.commit()
+            if cursor.rowcount > 0:
+                self.excluded_user_cache.pop(guild_id, None)
             return cursor.rowcount > 0
 
     async def get_admin_role_ids(self, guild_id: int) -> set[int]:
         async with self.lock:
-            rows = self.connection.execute(
+            rows = await self.connection.execute_fetchall(
                 """
                 SELECT role_id
                 FROM admin_roles
                 WHERE guild_id = ?
                 """,
                 (guild_id,),
-            ).fetchall()
+            )
         return {int(row["role_id"]) for row in rows}
 
     async def set_admin_roles(self, guild_id: int, role_ids: Iterable[int]) -> None:
         unique_role_ids = list(dict.fromkeys(role_ids))
-        async with self.lock:
-            self.connection.execute(
+        async with self.lock, self.transaction():
+            await self.connection.execute(
                 "DELETE FROM admin_roles WHERE guild_id = ?",
                 (guild_id,),
             )
-            self.connection.executemany(
+            await self.connection.executemany(
                 """
                 INSERT INTO admin_roles (guild_id, role_id)
                 VALUES (?, ?)
                 """,
                 [(guild_id, role_id) for role_id in unique_role_ids],
             )
-            self.connection.commit()
 
     async def remove_guild(self, guild_id: int) -> None:
-        async with self.lock:
-            self.connection.execute(
+        async with self.lock, self.transaction():
+            await self.connection.execute(
                 "DELETE FROM notifications WHERE guild_id = ?",
                 (guild_id,),
             )
-            self.connection.execute(
+            await self.connection.execute(
                 "DELETE FROM admin_roles WHERE guild_id = ?",
                 (guild_id,),
             )
-            self.connection.execute(
+            await self.connection.execute(
                 "DELETE FROM excluded_users WHERE guild_id = ?",
                 (guild_id,),
             )
-            self.connection.commit()
+            self.excluded_user_cache.pop(guild_id, None)
 
     @staticmethod
-    def _notification_from_row(row: sqlite3.Row) -> Notification:
+    def _notification_from_row(row: aiosqlite.Row) -> Notification:
         return Notification(
             id=int(row["id"]),
             guild_id=int(row["guild_id"]),
@@ -913,7 +1000,10 @@ class AddNotificationView(RestrictedView):
             voice_channel = self.guild.get_channel(voice_channel_id)
             if not isinstance(voice_channel, discord.VoiceChannel):
                 continue
-            count = await counted_human_count(voice_channel, self.database)
+            excluded_user_ids = await self.database.get_excluded_user_ids(
+                voice_channel.guild.id
+            )
+            count = counted_human_count(voice_channel, excluded_user_ids)
             if count >= self.threshold_value:
                 await self.database.set_triggered(
                     notification_id,
@@ -1245,6 +1335,7 @@ class VoicelyRoleBot(commands.Bot):
         self.database = database
         self.dev_guild_id = dev_guild_id
         self.initialized_states = False
+        self.voice_channel_locks: dict[tuple[int, int], asyncio.Lock] = {}
 
     async def setup_hook(self) -> None:
         await self.database.initialize()
@@ -1285,17 +1376,25 @@ class VoicelyRoleBot(commands.Bot):
 
     async def on_guild_remove(self, guild: discord.Guild) -> None:
         await self.database.remove_guild(guild.id)
+        for key in [key for key in self.voice_channel_locks if key[0] == guild.id]:
+            self.voice_channel_locks.pop(key, None)
+
+    async def close(self) -> None:
+        await self.database.close()
+        await super().close()
 
     async def reconcile_all_trigger_states(self) -> None:
         for guild in self.guilds:
-            notifications = await self.database.get_notifications(guild.id)
-            for notification in notifications:
-                channel_ids = await self.database.get_voice_channel_ids(notification.id)
+            notifications = await self.database.get_notifications_with_voice_channels(
+                guild.id
+            )
+            excluded_user_ids = await self.database.get_excluded_user_ids(guild.id)
+            for notification, channel_ids in notifications:
                 for channel_id in channel_ids:
                     channel = guild.get_channel(channel_id)
                     if not isinstance(channel, discord.VoiceChannel):
                         continue
-                    count = await counted_human_count(channel, self.database)
+                    count = counted_human_count(channel, excluded_user_ids)
                     if count == 0:
                         await self.database.clear_trigger_state(
                             notification.id,
@@ -1309,7 +1408,14 @@ class VoicelyRoleBot(commands.Bot):
                         )
 
     async def evaluate_voice_channel(self, channel: discord.VoiceChannel) -> None:
-        count = await counted_human_count(channel, self.database)
+        key = (channel.guild.id, channel.id)
+        lock = self.voice_channel_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            await self._evaluate_voice_channel(channel)
+
+    async def _evaluate_voice_channel(self, channel: discord.VoiceChannel) -> None:
+        excluded_user_ids = await self.database.get_excluded_user_ids(channel.guild.id)
+        count = counted_human_count(channel, excluded_user_ids)
         watched = await self.database.get_notifications_for_voice_channel(
             channel.guild.id,
             channel.id,
@@ -1345,21 +1451,17 @@ class VoicelyRoleBot(commands.Bot):
             if count < notification.threshold:
                 continue
 
-            await self.database.set_triggered(
-                notification.id,
-                channel.id,
-                True,
-            )
             sent_message = await self.send_notification(
                 notification,
                 channel,
                 count,
             )
             if sent_message is not None:
-                await self.database.set_message_id(
+                await self.database.set_trigger_state(
                     notification.id,
                     channel.id,
-                    sent_message.id,
+                    triggered=True,
+                    message_id=sent_message.id,
                 )
 
     def render_notification_message(
@@ -1491,7 +1593,7 @@ class VoicelyRoleBot(commands.Bot):
             return
 
         try:
-            message = await destination.fetch_message(message_id)
+            message = destination.get_partial_message(message_id)
             await message.edit(
                 content=self.render_notification_message(
                     notification,
@@ -1511,6 +1613,11 @@ class VoicelyRoleBot(commands.Bot):
                 "The message for notification %s in voice channel %s was deleted.",
                 notification.id,
                 voice_channel.id,
+            )
+            await self.database.set_message_id(
+                notification.id,
+                voice_channel.id,
+                None,
             )
         except discord.Forbidden:
             logger.warning(
@@ -1613,8 +1720,12 @@ class VoicelyRoleCommands(commands.Cog):
         if not await self.require_manager(interaction):
             return
         assert interaction.guild is not None
-        notifications = await self.database.get_notifications(interaction.guild.id)
-        if not notifications:
+        notification_channels = (
+            await self.database.get_notifications_with_voice_channels(
+                interaction.guild.id
+            )
+        )
+        if not notification_channels:
             await interaction.response.send_message(
                 "This server has no saved notifications.",
                 ephemeral=True,
@@ -1625,8 +1736,7 @@ class VoicelyRoleCommands(commands.Cog):
         current = discord.Embed(title="Voicely Role notifications")
         field_count = 0
 
-        for notification in notifications:
-            channel_ids = await self.database.get_voice_channel_ids(notification.id)
+        for notification, channel_ids in notification_channels:
             voice_channels = ", ".join(f"<#{channel_id}>" for channel_id in channel_ids)
             value = (
                 f"**Threshold:** {notification.threshold}\n"
@@ -1820,8 +1930,6 @@ ALLOWED_PLACEHOLDERS = {
 
 
 def find_unknown_placeholders(template: str) -> set[str]:
-    import string
-
     unknown: set[str] = set()
     try:
         for _, field_name, _, _ in string.Formatter().parse(template):
@@ -1832,11 +1940,10 @@ def find_unknown_placeholders(template: str) -> set[str]:
     return unknown
 
 
-async def counted_human_count(
+def counted_human_count(
     channel: discord.VoiceChannel,
-    database: Database,
+    excluded_user_ids: set[int] | frozenset[int],
 ) -> int:
-    excluded_user_ids = await database.get_excluded_user_ids(channel.guild.id)
     return sum(
         1
         for member in channel.members
